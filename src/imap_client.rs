@@ -1,7 +1,10 @@
 use imap::Session;
 use native_tls::{TlsConnector, TlsStream};
 use std::{error::Error, net::TcpStream};
-use mailparse::parse_headers;
+
+use mailparse::{parse_mail, ParsedMail};
+
+use html2text::from_read;
 
 pub struct ImapClient 
 {
@@ -10,7 +13,7 @@ pub struct ImapClient
 
 impl ImapClient 
 {
-    pub fn connect(user: &str, pass: &str) -> Result<Self, Box<dyn Error>>
+    pub fn connect(user: &str, pass: &str) -> Result<Self, Box<dyn Error>> 
     {
         let domain = "imap.gmail.com";
         let tls = TlsConnector::builder().build()?;
@@ -22,8 +25,9 @@ impl ImapClient
     pub fn fetch_inbox(&mut self, count: usize) -> Result<Vec<(u32, String)>, Box<dyn Error>> 
     {
         self.session.select("INBOX")?;
+
         let mut uids: Vec<u32> = self.session.search("ALL")?.into_iter().collect();
-        uids.sort_unstable(); // ascending
+        uids.sort_unstable();
         let newest = uids.into_iter().rev().take(count);
 
         let mut list = Vec::new();
@@ -32,18 +36,15 @@ impl ImapClient
             let resp = self.session.uid_fetch(uid.to_string(), "RFC822.HEADER")?;
             for fetch in resp.iter() 
             {
-                if let Some(header) = fetch.header() 
+                if let Some(header_bytes) = fetch.header() 
                 {
-                    let (hdrs, _) = parse_headers(header)?;
-                    let subject = hdrs.iter()
-                        .find(|h| h.get_key().eq_ignore_ascii_case("Subject"))
-                        .map(|h| h.get_value().to_string())
-                        .unwrap_or_default();
-                    let from = hdrs.iter()
-                        .find(|h| h.get_key().eq_ignore_ascii_case("From"))
-                        .map(|h| h.get_value().to_string())
-                        .unwrap_or_default();
-                    list.push((uid, format!("{} — {}", from, subject)));
+                    let parsed = parse_mail(header_bytes)?.subparts; 
+                    let mut from = String::new();
+                    let mut subject = String::new();
+                    for part in &parsed {
+                    }
+                    let raw = String::from_utf8_lossy(header_bytes).into_owned();
+                    list.push((uid, raw.replace("\r\n", " ")));
                 }
             }
         }
@@ -53,14 +54,58 @@ impl ImapClient
     pub fn fetch_body(&mut self, uid: u32) -> Result<String, Box<dyn Error>> 
     {
         let resp = self.session.uid_fetch(uid.to_string(), "RFC822")?;
-        if let Some(fetch) = resp.iter().next() 
+        let raw = match resp.iter().next().and_then(|f| f.body()) 
         {
-            if let Some(body) = fetch.body() 
-            {
-                return Ok(String::from_utf8_lossy(body).into_owned());
-            }
+            Some(b) => b,
+            None => return Ok(String::new()),
+        };
+
+        let mail = parse_mail(raw)?;
+
+        if let Some(txt) = find_plain(&mail)? 
+        {
+            return Ok(txt);
         }
-        Ok(String::new())
+
+        if let Some(html) = find_html(&mail)? 
+        {
+            let converted = from_read(html.as_bytes(), 80);
+            return Ok(converted);
+        }
+
+        Ok(String::from_utf8_lossy(raw).into_owned())
     }
+}
+
+fn find_plain(mail: &ParsedMail) -> Result<Option<String>, Box<dyn Error>> 
+{
+    if mail.ctype.mimetype.eq_ignore_ascii_case("text/plain") 
+    {
+        return Ok(Some(mail.get_body()?));
+    }
+    for sub in &mail.subparts 
+    {
+        if let Some(t) = find_plain(sub)? 
+        {
+            return Ok(Some(t));
+        }
+    }
+    Ok(None)
+}
+
+fn find_html(mail: &ParsedMail) -> Result<Option<String>, Box<dyn Error>> 
+{
+    if mail.ctype.mimetype.eq_ignore_ascii_case("text/html") 
+    {
+        return Ok(Some(mail.get_body()?));
+    }
+    for sub in &mail.subparts 
+    {
+        if let Some(h) = find_html(sub)? 
+        {
+            return Ok(Some(h));
+        }
+    }
+    Ok(None)
 }
 

@@ -9,7 +9,7 @@ use ratatui::
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Terminal,
 };
 use std::{error::Error, io};
@@ -122,6 +122,7 @@ where
                     {
                         let p = Paragraph::new(self.view_buffer.as_ref())
                             .block(Block::default().borders(Borders::ALL).title("Message"))
+                            .wrap(Wrap {trim: true})
                             .scroll((self.view_scroll, 0));
                         f.render_widget(p, top[1]);
                     }
@@ -145,6 +146,7 @@ where
                         f.render_widget(p_sub, fields[1]);
                         let p_body = Paragraph::new(self.compose_body.as_ref())
                             .block(Block::default().borders(Borders::ALL).title("Body"))
+                            .wrap(Wrap {trim: true})
                             .scroll((self.compose_scroll, 0));
                         f.render_widget(p_body, fields[2]);
                     }
