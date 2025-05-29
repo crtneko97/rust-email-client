@@ -1,0 +1,14 @@
+[package]
+name = "bps_mail"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dotenvy    = "0.15"
+imap       = "2"
+native-tls = "0.2"
+lettre     = { version = "0.11", features = ["smtp-transport", "builder"] }
+oauth2     = "4.0"
+ratatui    = "0.20"
+crossterm  = "0.28"
+mailparse  = "0.14"  

@@ -1,0 +1,11 @@
+# Rust build artifacts
+/target/
+/**/*.rs.bk
+
+# Credentials
+.env
+
+# IDE and Editor
+.vscode/
+.idea/
+
