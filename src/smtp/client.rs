@@ -1,5 +1,6 @@
-use lettre::transport::smtp::{authentication::{Credentials, Mechanism}, SmtpTransport};
+use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::{Message, Transport};
+use lettre::transport::smtp::SmtpTransport;
 use std::error::Error;
 
 pub struct SmtpClient 
@@ -9,8 +10,8 @@ pub struct SmtpClient
 
 impl SmtpClient 
 {
-    pub fn connect(user: &str, pass: &str) -> Result<Self, Box<dyn Error>> 
-    {
+   pub fn connect(user: &str, pass: &str) -> Result<Self, Box<dyn Error>> 
+   {
         let creds = Credentials::new(user.into(), pass.into());
         let mailer = SmtpTransport::starttls_relay("smtp.gmail.com")?
             .credentials(creds)
@@ -19,9 +20,10 @@ impl SmtpClient
         Ok(Self { mailer })
     }
 
-    pub fn send(&self, email: Message) -> Result<(), Box<dyn Error>> 
-    {
+   pub fn send(&self, email: Message) -> Result<(), Box<dyn Error>> 
+   {
         self.mailer.send(&email)?;
         Ok(())
     }
 }
+
