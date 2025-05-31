@@ -1,3 +1,119 @@
+/*
+    This module (`src/ui/mod.rs`) defines the entire text‐based user interface (TUI)
+    for bps_mail, handling the Inbox, View, Compose, and Delete/Clear actions. After
+    importing all necessary crates (crossterm for terminal control, ratatui for UI
+    widgets/layout, and std types for I/O and error handling), we declare:
+
+    1. `pub enum Mode`:
+       - Tracks which “screen” the user is currently looking at:
+         • `Inbox`        – showing only the list of message summaries.
+         • `View`         – displaying the full content (headers + body) of one message.
+         • `Compose`      – showing the “To/Subject/Body” input fields for sending mail.
+         • `ConfirmDelete`– a temporary confirm state when the user presses ‘d’ once.
+
+    2. `pub enum ComposeField`:
+       - Tracks which field (To, Subject, or Body) is currently focused when composing.
+
+    3. `pub struct App<F, G, H, J>`:
+       - The central application state. It holds:
+         • `items: Vec<(u32, String)>`   – a vector of (UID, “from   date”) pairs,
+           used to populate the left‐hand “Inbox” list.
+         • `selected: usize`             – index of the currently highlighted row.
+         • `mode: Mode`                  – the current mode (`Inbox`, `View`, etc.).
+         • `view_buffer: String`         – “View” mode’s content (headers + body).
+         • `view_scroll: u16`            – vertical scroll offset in “View” mode.
+         • `compose_to: String`          – “To:” field text in Compose mode.
+         • `compose_subject: String`     – “Subject:” field text.
+         • `compose_body: String`        – “Body:” field text.
+         • `compose_field: ComposeField` – which Compose field is active.
+         • `compose_scroll: u16`         – vertical scroll offset in the Body field.
+         • `on_send: F`                  – callback to send an email (SMTP).
+         • `on_view: G`                  – callback to fetch a single message’s full text.
+         • `on_refresh: H`               – callback to fetch the latest N summaries.
+         • `on_delete: J`                – callback to delete a single message.
+         • `inbox_count: usize`          – how many messages to load from IMAP.
+         • `tooltip: String`             – a small status line at the bottom (e.g. “Loading…”).
+
+       The four generic parameters (`F, G, H, J`) correspond to:
+         • `F: FnMut(&str, &str, &str) -> Result<(), Box<dyn Error>>`
+             – when Compose mode finishes (Ctrl+S), call `on_send(to, subject, body)`.
+         • `G: FnMut(u32) -> Result<String, Box<dyn Error>>`
+             – when the user presses ‘v’ on a selected UID, call `on_view(uid)` to
+               return the full “From/Subject/Date\n\nBody” string.
+         • `H: FnMut(usize) -> Result<Vec<(u32, String)>, Box<dyn Error>>`
+             – when the user presses ‘m’ to “load more,” call `on_refresh(new_count)`
+               to re‐fetch that many summaries from IMAP.
+         • `J: FnMut(u32) -> Result<(), Box<dyn Error>>`
+             – when the user confirms deletion (‘d’ twice), call `on_delete(uid)`.
+
+    4. `impl<F, G, H, J> App<F, G, H, J>`:
+       - `pub fn new(…) -> Self`:
+         Constructs the `App` by storing all four callbacks, the initial
+         summary list, starting `inbox_count`, and an empty tooltip. The initial
+         selected index is 0 and mode is `Inbox`.
+
+       - `pub fn run(mut self) -> Result<(), Box<dyn Error>>`:
+         The main event loop that:
+         a. Enables raw‐mode, switches to the alternate screen, and creates
+            a Crossterm/TUI `Terminal`.
+         b. Loops forever until the user presses ‘q’, drawing on each iteration:
+            i.   Splits the terminal vertically (90% main, 10% tooltip).
+            ii.  Splits the top (90%) horizontally (30% Inbox list, 70% Detail).
+            iii. Renders the “Inbox” List widget on the left with borders/“>>” highlight.
+            iv.  On the right:
+                  • If mode = `Inbox`, shows a placeholder box with instructions.
+                  • If mode = `View` or `ConfirmDelete`, shows a `Paragraph` containing
+                    either the message content (`view_buffer`) or a red‐styled “Confirm Delete” box.
+                  • If mode = `Compose`, splits that right area into three sub‐rectangles:
+                    – A “To:” input line
+                    – A “Subject:” input line
+                    – A scrollable “Body:” paragraph
+                  Each input widget is drawn with a border and, if that field is active,
+                  we append a `*` on its title to indicate focus.
+            v.   Renders the bottom (10%) tooltip/“Status” box with `self.tooltip` content.
+
+         c. Waits for a key event (`event::read()`) and dispatches based on `mode`:
+            • If `Mode::Inbox`, keys:
+              – `q` → exit loop (return Ok)
+              – `v` → fetch message text for this UID via `on_view`, store in `view_buffer`,
+                       reset scroll, switch to `Mode::View`.
+              – `c` → clear compose fields, switch to `Mode::Compose`.
+              – `m` → append 10 to `inbox_count`, set `tooltip="Loading more..."`,
+                       re‐fetch summaries via `on_refresh`, reset highlight, then set
+                       `tooltip="Successfully loaded N messages"`.
+              – `d` → switch to `Mode::ConfirmDelete`, set `tooltip="Confirm: press d again"`.
+              – Arrow Up/Down → move the highlight up/down in the inbox list, clearing `tooltip`.
+
+            • If `Mode::ConfirmDelete`:
+              – `d` → actually call `on_delete(uid)`, re‐fetch via `on_refresh`, reset to `Inbox`, set `tooltip="Deleted!"`.
+              – `Esc` or any other key → cancel deletion, switch back to `Mode::Inbox`, clear `tooltip`.
+
+            • If `Mode::View`:
+              – `Esc` → go back to `Mode::Inbox`, clear `tooltip`.
+              – Up/Down → scroll `view_scroll` up or down (paragraph scroll).
+
+            • If `Mode::Compose`:
+              – `Esc` → cancel compose, switch back to `Mode::Inbox`, clear `tooltip`.
+              – `Tab`/`BackTab` → cycle focus between `ComposeField::To`, `Subject`, `Body`.
+              – `Ctrl+S` → call `on_send(to, subject, body)`, switch back to `Mode::Inbox`, set `tooltip="Sent!"`.
+              – Alphanumeric or punctuation key → append the character to whichever field has focus.
+              – `Backspace` → remove the last character from that field.
+              – `Enter` → if in `Body` field, insert newline; otherwise move focus to next field.
+              – Up/Down → if in `Body`, adjust `compose_scroll`.
+
+         d. After breaking out of the loop, disable raw‐mode and restore the
+            main screen (LeaveAlternateScreen). Return `Ok(())`.
+
+    In short: by wiring the four IMAP/SMTP callbacks into `App::new(...)`
+    and calling `app.run()`, we open a full‐screen TUI that displays an inbox
+    on the left, lets you press keys to load, view, compose, or delete emails,
+    and always shows a bottom status line (“tooltip”) that reports progress.
+
+    — To extend or refactor further, you can (later) pull out each rendering
+      block into its own submodule (e.g. `inbox.rs`, `view.rs`, `compose.rs`,
+      `delete.rs`), but for now everything lives in this one file.
+*/
+
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
@@ -12,6 +128,7 @@ use ratatui::{
 };
 use std::{error::Error, io};
 
+/// The different modes our UI can be in:
 pub enum Mode {
     Inbox,
     View,
@@ -20,18 +137,20 @@ pub enum Mode {
     ConfirmDelete,
 }
 
+/// Which field is currently selected in “Compose” mode.
 pub enum ComposeField {
     To,
     Subject,
     Body,
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// App now has four generic parameters: 
-//   F = on_send, G = on_view, H = on_refresh, J = on_delete.
-// We also add two new fields: `on_delete: J`, `inbox_count: usize`, and 
-// `tooltip: String` for the bottom row.
-// ──────────────────────────────────────────────────────────────────────────────
+/// Our main TUI application. It now has four callbacks:
+///   - on_send(&str, &str, &str)  => send a message via SMTP
+///   - on_view(u32)               => fetch and return message content via IMAP
+///   - on_refresh(usize)          => re‐fetch `count` messages via IMAP
+///   - on_delete(u32)             => delete a single message via IMAP
+///
+/// It also has `inbox_count` (how many to fetch) and a `tooltip` (status line).
 pub struct App<F, G, H, J>
 where
     F: FnMut(&str, &str, &str) -> Result<(), Box<dyn Error>> + 'static,
@@ -49,12 +168,12 @@ where
     compose_body: String,
     compose_field: ComposeField,
     compose_scroll: u16,
-    on_send: F,      // FnMut(&str, &str, &str) -> Result<(), Error>
-    on_view: G,      // FnMut(u32) -> Result<String, Error>
-    on_refresh: H,   // FnMut(usize) -> Result<Vec<(u32,String)>, Error>
-    on_delete: J,    // FnMut(u32) -> Result<(), Error>
+    on_send: F,
+    on_view: G,
+    on_refresh: H,
+    on_delete: J,
     inbox_count: usize, // how many messages to fetch
-    tooltip: String,    // bottom row text
+    tooltip: String,    // bottom status line
 }
 
 impl<F, G, H, J> App<F, G, H, J>
@@ -101,6 +220,8 @@ where
         }
     }
 
+    /// The main event loop + rendering logic. This is mostly unchanged from your
+    /// old `ui.rs`, except now it lives in this module and references our submodules.
     pub fn run(mut self) -> Result<(), Box<dyn Error>> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -128,7 +249,7 @@ where
                     .split(main_area);
 
                 // ────────────────────────────────────────────────────────────────
-                // 2a) LEFT COLUMN (columns[0]): always render the Inbox list
+                // 2a) LEFT COLUMN: always render the Inbox list
                 // ────────────────────────────────────────────────────────────────
                 let list_items: Vec<ListItem> = self
                     .items
@@ -144,11 +265,11 @@ where
                 f.render_stateful_widget(list, columns[0], &mut state);
 
                 // ────────────────────────────────────────────────────────────────
-                // 2b) RIGHT COLUMN (columns[1]): render View / Compose / Placeholder
+                // 2b) RIGHT COLUMN: render View / Compose / Placeholder
                 // ────────────────────────────────────────────────────────────────
                 match self.mode {
                     Mode::Inbox => {
-                        // In “Inbox” mode (no email opened), show a simple placeholder
+                        // Show a placeholder when no message is open
                         let placeholder = Paragraph::new(
                             "Press 'v' to view, 'c' to compose, 'm' to load more, 'd' to delete, 'q' to quit",
                         )
@@ -157,14 +278,13 @@ where
                         f.render_widget(placeholder, columns[1]);
                     }
                     Mode::View | Mode::ConfirmDelete => {
-                        // In “View” or “ConfirmDelete” mode, show the message body scrollable
+                        // In “View” or “ConfirmDelete” mode, show the message’s content (or a confirm border)
                         let title = match self.mode {
                             Mode::View => "Message",
                             Mode::ConfirmDelete => "Confirm Delete (Press d again)",
                             _ => unreachable!(),
                         };
                         let mut block = Block::default().borders(Borders::ALL).title(title);
-                        // If ConfirmDelete, highlight the border in reversed style:
                         if let Mode::ConfirmDelete = self.mode {
                             block = block.style(Style::default().add_modifier(Modifier::REVERSED));
                         }
@@ -175,7 +295,7 @@ where
                         f.render_widget(p, columns[1]);
                     }
                     Mode::Compose => {
-                        // In Compose mode, split the right column vertically into To / Subject / Body
+                        // In Compose mode, split the right column into To/Subject/Body fields
                         let compose_chunks = Layout::default()
                             .direction(Direction::Vertical)
                             .constraints([
@@ -203,7 +323,7 @@ where
                         };
                         let p_sub = Paragraph::new(self.compose_subject.as_ref())
                             .block(Block::default().borders(Borders::ALL).title(sub_title));
-                        f.render_widget(p_sub, compose_chunks[1]);
+                        f.render_widget(p_sub, compose_chunks[1]);   
 
                         // “Body” field
                         let p_body = Paragraph::new(self.compose_body.as_ref())
@@ -251,20 +371,22 @@ where
                         }
 
                         KeyCode::Char('m') => {
-                            // Load more emails: display a tooltip, fetch, then clear tooltip
+                            // Load more emails: display a tooltip, fetch, then update tooltip
                             self.tooltip = "Loading more…".into();
                             self.inbox_count += 10;
                             self.items = (self.on_refresh)(self.inbox_count)?;
                             self.selected = 0;
-                            // After re-fetch, update tooltip:
-                            self.tooltip = format!("Successfully loaded {} messages", self.inbox_count);
+                            self.tooltip =
+                                format!("Successfully loaded {} messages", self.inbox_count);
                         }
 
                         KeyCode::Char('d') => {
                             // First press of `d` enters “ConfirmDelete” mode (tooltip prompt)
                             if let Mode::Inbox = self.mode {
                                 self.mode = Mode::ConfirmDelete;
-                                self.tooltip = "Are you sure you want to delete? Press 'd' again to confirm.".into();
+                                self.tooltip =
+                                    "Are you sure you want to delete? Press 'd' again to confirm."
+                                        .into();
                             }
                         }
 
@@ -274,14 +396,12 @@ where
                             }
                             self.tooltip.clear();
                         }
-
                         KeyCode::Up => {
                             if self.selected > 0 {
                                 self.selected -= 1;
                             }
                             self.tooltip.clear();
                         }
-
                         _ => {}
                     },
 
@@ -344,7 +464,11 @@ where
                             self.tooltip.clear();
                         }
                         (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
-                            (self.on_send)(&self.compose_to, &self.compose_subject, &self.compose_body)?;
+                            (self.on_send)(
+                                &self.compose_to,
+                                &self.compose_subject,
+                                &self.compose_body,
+                            )?;
                             self.mode = Mode::Inbox;
                             self.tooltip = "Sent!".into();
                         }

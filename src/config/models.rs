@@ -1,8 +1,8 @@
 use dotenvy::dotenv;
 use std::env;
 
-pub struct Config 
-{
+#[derive(Debug, Clone)]
+pub struct Config {
     pub imap_user: String,
     pub imap_pass: String,
     pub smtp_user: String,
