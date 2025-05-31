@@ -120,6 +120,18 @@ impl ImapClient
         }
         Ok(String::from_utf8_lossy(raw).into_owned())
     }
+
+    pub fn delete_message(&mut self, uid: u32) -> Result<(), Box<dyn Error>> 
+    {
+        // 1) Make sure INBOX is selected
+        self.session.select("INBOX")?;
+        // 2) Set the \\Deleted flag on that message
+        self.session
+            .uid_store(uid.to_string(), "+FLAGS (\\Deleted)")?;
+        // 3) Permanently delete all messages flagged \\Deleted
+        self.session.expunge()?;
+        Ok(())
+    }
 }
 
 fn find_plain(mail: &ParsedMail) -> Result<Option<String>, Box<dyn Error>> 
