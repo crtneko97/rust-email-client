@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn Error>>
 
     let mut imap = ImapClient::connect(&cfg.imap_user, &cfg.imap_pass)?;
 
-    let items = imap.fetch_inbox(100)?;
+    let items = imap.fetch_inbox(20)?;
     let mut smtp = SmtpClient::connect(&cfg.smtp_user, &cfg.smtp_pass)?;
 
     let mut on_view = move |uid: u32| imap.fetch_body(uid);

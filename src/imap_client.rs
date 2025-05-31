@@ -1,9 +1,9 @@
 use imap::Session;
+use mailparse::{parse_mail, ParsedMail};
 use native_tls::{TlsConnector, TlsStream};
 use std::{error::Error, net::TcpStream};
 
-use mailparse::{parse_mail, ParsedMail};
-
+use chrono::{DateTime, FixedOffset};
 use html2text::from_read;
 
 pub struct ImapClient 
@@ -22,32 +22,80 @@ impl ImapClient
         Ok(Self { session })
     }
 
-    pub fn fetch_inbox(&mut self, count: usize) -> Result<Vec<(u32, String)>, Box<dyn Error>> 
-    {
+   pub fn fetch_inbox(&mut self, count: usize) -> Result<Vec<(u32, String)>, Box<dyn Error>> 
+   {
         self.session.select("INBOX")?;
 
-        let mut uids: Vec<u32> = self.session.search("ALL")?.into_iter().collect();
-        uids.sort_unstable();
-        let newest = uids.into_iter().rev().take(count);
+        let all_fetches = self.session.fetch("1:*", "(UID INTERNALDATE)")?;
 
-        let mut list = Vec::new();
-        for uid in newest 
+        let mut uid_dates: Vec<(u32, DateTime<FixedOffset>)> =
+            Vec::with_capacity(all_fetches.len());
+        for fetch in all_fetches.iter() 
         {
-            let resp = self.session.uid_fetch(uid.to_string(), "RFC822.HEADER")?;
+            if let (Some(uid), Some(internal_date)) = (fetch.uid, fetch.internal_date()) 
+            {
+                uid_dates.push((uid, internal_date));
+            }
+        }
+
+        uid_dates.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+        let newest_uids = uid_dates
+            .into_iter()
+            .take(count)
+            .map(|(uid, _)| uid)
+            .collect::<Vec<u32>>();
+
+        let mut list = Vec::with_capacity(newest_uids.len());
+
+        for uid in newest_uids 
+        {
+            let resp = self.session.uid_fetch
+            (
+                uid.to_string(),
+                "BODY.PEEK[HEADER.FIELDS (FROM DATE)]",
+            )?;
             for fetch in resp.iter() 
             {
                 if let Some(header_bytes) = fetch.header() 
                 {
-                    let parsed = parse_mail(header_bytes)?.subparts; 
-                    let mut from = String::new();
-                    let mut subject = String::new();
-                    for part in &parsed {
+                    let header_text = String::from_utf8_lossy(header_bytes);
+                    let mut from_line = String::new();
+                    let mut date_line = String::new();
+
+                   for raw_line in header_text.split("\r\n") 
+                   {
+                        let lower = raw_line.to_lowercase();
+                        if lower.starts_with("from:") {
+                            let after = raw_line["From:".len()..].trim();
+                            if let Some(start) = after.find('<') {
+                                if let Some(end) = after[start + 1..].find('>') 
+                                {
+                                    from_line = after[start + 1..start + 1 + end].to_string();
+                                } 
+                                else 
+                                {
+                                    from_line = after[start + 1..].to_string();
+                                }
+                            } 
+                            else 
+                            {
+                                from_line = after.to_string();
+                            }
+                        } 
+                        else if lower.starts_with("date:") 
+                        {
+                            let after = raw_line["Date:".len()..].trim();
+                            date_line = after.to_string();
+                        }
                     }
-                    let raw = String::from_utf8_lossy(header_bytes).into_owned();
-                    list.push((uid, raw.replace("\r\n", " ")));
+
+                    let combined = format!("{}    {}", from_line, date_line);
+                    list.push((uid, combined));
                 }
             }
         }
+
         Ok(list)
     }
 
@@ -61,18 +109,15 @@ impl ImapClient
         };
 
         let mail = parse_mail(raw)?;
-
         if let Some(txt) = find_plain(&mail)? 
         {
             return Ok(txt);
         }
-
         if let Some(html) = find_html(&mail)? 
         {
             let converted = from_read(html.as_bytes(), 80);
             return Ok(converted);
         }
-
         Ok(String::from_utf8_lossy(raw).into_owned())
     }
 }
