@@ -113,7 +113,6 @@
       block into its own submodule (e.g. `inbox.rs`, `view.rs`, `compose.rs`,
       `delete.rs`), but for now everything lives in this one file.
 */
-
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
@@ -271,7 +270,7 @@ where
                     Mode::Inbox => {
                         // Show a placeholder when no message is open
                         let placeholder = Paragraph::new(
-                            "Press 'v' to view, 'c' to compose, 'm' to load more, 'd' to delete, 'q' to quit",
+                            "Press 'v' to view, 'r' to reply, 'c' to compose, 'm' to load more, 'd' to delete, 'q' to quit",
                         )
                         .block(Block::default().borders(Borders::ALL).title("Instructions"))
                         .wrap(Wrap { trim: true });
@@ -323,7 +322,7 @@ where
                         };
                         let p_sub = Paragraph::new(self.compose_subject.as_ref())
                             .block(Block::default().borders(Borders::ALL).title(sub_title));
-                        f.render_widget(p_sub, compose_chunks[1]);   
+                        f.render_widget(p_sub, compose_chunks[1]);
 
                         // “Body” field
                         let p_body = Paragraph::new(self.compose_body.as_ref())
@@ -359,8 +358,41 @@ where
                             self.tooltip.clear();
                         }
 
+                        KeyCode::Char('r') => {
+                            // Reply to the selected message:
+                            // 1) Fetch full text (headers + body) from IMAP via on_view
+                            let uid = self.items[self.selected].0;
+                            let full_text = (self.on_view)(uid)?;
+                            // 2) Parse out "From: " and "Subject: " lines
+                            let mut lines = full_text.lines();
+                            let from_line = lines
+                                .next()
+                                .and_then(|l| l.strip_prefix("From: "))
+                                .unwrap_or("")
+                                .to_string();
+                            let subject_line = lines
+                                .next()
+                                .and_then(|l| l.strip_prefix("Subject: "))
+                                .unwrap_or("")
+                                .to_string();
+                            // 3) Prefill To: and Subject: fields
+                            self.compose_to = from_line.clone();
+                            if subject_line.to_lowercase().starts_with("re:") {
+                                self.compose_subject = subject_line.clone();
+                            } else {
+                                self.compose_subject = format!("Re: {}", subject_line);
+                            }
+                            // 4) Clear the body (or optionally insert quoted original)
+                            self.compose_body.clear();
+                            // 5) Switch to Compose mode, focusing on the Body field
+                            self.compose_field = ComposeField::Body;
+                            self.compose_scroll = 0;
+                            self.mode = Mode::Compose;
+                            self.tooltip.clear();
+                        }
+
                         KeyCode::Char('c') => {
-                            // Switch to Compose mode
+                            // Compose a brand‐new message
                             self.compose_to.clear();
                             self.compose_subject.clear();
                             self.compose_body.clear();
