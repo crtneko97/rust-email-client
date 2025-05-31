@@ -22,12 +22,10 @@ impl ImapClient
         Ok(Self { session })
     }
 
-   pub fn fetch_inbox(&mut self, count: usize) -> Result<Vec<(u32, String)>, Box<dyn Error>> 
-   {
+    pub fn fetch_inbox(&mut self, count: usize) -> Result<Vec<(u32, String)>, Box<dyn Error>> 
+    {
         self.session.select("INBOX")?;
-
         let all_fetches = self.session.fetch("1:*", "(UID INTERNALDATE)")?;
-
         let mut uid_dates: Vec<(u32, DateTime<FixedOffset>)> =
             Vec::with_capacity(all_fetches.len());
         for fetch in all_fetches.iter() 
@@ -37,9 +35,7 @@ impl ImapClient
                 uid_dates.push((uid, internal_date));
             }
         }
-
         uid_dates.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-
         let newest_uids = uid_dates
             .into_iter()
             .take(count)
@@ -47,7 +43,6 @@ impl ImapClient
             .collect::<Vec<u32>>();
 
         let mut list = Vec::with_capacity(newest_uids.len());
-
         for uid in newest_uids 
         {
             let resp = self.session.uid_fetch
@@ -63,10 +58,11 @@ impl ImapClient
                     let mut from_line = String::new();
                     let mut date_line = String::new();
 
-                   for raw_line in header_text.split("\r\n") 
-                   {
+                    for raw_line in header_text.split("\r\n") 
+                    {
                         let lower = raw_line.to_lowercase();
-                        if lower.starts_with("from:") {
+                        if lower.starts_with("from:") 
+                        {
                             let after = raw_line["From:".len()..].trim();
                             if let Some(start) = after.find('<') {
                                 if let Some(end) = after[start + 1..].find('>') 
@@ -95,8 +91,50 @@ impl ImapClient
                 }
             }
         }
-
         Ok(list)
+    }
+
+    pub fn fetch_headers(&mut self, uid: u32) -> Result<(String, String, String), Box<dyn Error>> 
+    {
+        self.session.select("INBOX")?;
+
+        let resp = self.session.uid_fetch
+        (
+            uid.to_string(),
+            "BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)]",
+        )?;
+
+        for fetch in resp.iter() 
+        {
+            if let Some(header_bytes) = fetch.header() 
+            {
+                let header_text = String::from_utf8_lossy(header_bytes);
+                let mut from_val = String::new();
+                let mut subject_val = String::new();
+                let mut date_val = String::new();
+
+               for raw_line in header_text.split("\r\n") 
+               {
+                    let lower = raw_line.to_lowercase();
+                    if lower.starts_with("from:") 
+                    {
+                        from_val = raw_line["From:".len()..].trim().to_string();
+                    }
+                    else if lower.starts_with("subject:") 
+                    {
+                        subject_val = raw_line["Subject:".len()..].trim().to_string();
+                    }
+                    else if lower.starts_with("date:") 
+                    {
+                        date_val = raw_line["Date:".len()..].trim().to_string();
+                    }
+                }
+
+                return Ok((from_val, subject_val, date_val));
+            }
+        }
+
+        Ok((String::new(), String::new(), String::new()))
     }
 
     pub fn fetch_body(&mut self, uid: u32) -> Result<String, Box<dyn Error>> 
@@ -123,12 +161,8 @@ impl ImapClient
 
     pub fn delete_message(&mut self, uid: u32) -> Result<(), Box<dyn Error>> 
     {
-        // 1) Make sure INBOX is selected
         self.session.select("INBOX")?;
-        // 2) Set the \\Deleted flag on that message
-        self.session
-            .uid_store(uid.to_string(), "+FLAGS (\\Deleted)")?;
-        // 3) Permanently delete all messages flagged \\Deleted
+        self.session.uid_store(uid.to_string(), "+FLAGS (\\Deleted)")?;
         self.session.expunge()?;
         Ok(())
     }

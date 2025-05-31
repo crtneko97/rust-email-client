@@ -35,10 +35,19 @@ fn main() -> Result<(), Box<dyn Error>>
     };
 
     let imap_for_view = Rc::clone(&imap);
-    let on_view = move |uid: u32| 
+    let on_view = move |uid: u32| -> Result<String, Box<dyn Error>> 
     {
         let mut imap_ref = imap_for_view.borrow_mut();
-        imap_ref.fetch_body(uid)
+
+        let (from_val, subject_val, date_val) = imap_ref.fetch_headers(uid)?;
+        let body_text = imap_ref.fetch_body(uid)?;
+
+        let combined = format!
+        (
+            "From: {}\nSubject: {}\nDate: {}\n\n{}",
+            from_val, subject_val, date_val, body_text
+        );
+        Ok(combined)
     };
 
     let imap_for_refresh = Rc::clone(&imap);
@@ -77,6 +86,7 @@ fn main() -> Result<(), Box<dyn Error>>
         on_refresh,
         on_delete,
         inbox_count,
+        String::new(), 
     );
 
     app.run()
